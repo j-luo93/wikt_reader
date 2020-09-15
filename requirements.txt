@@ -1,3 +1,5 @@
 loguru
 tqdm
 pandas
+lxml
+cssselect

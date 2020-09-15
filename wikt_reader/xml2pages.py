@@ -6,8 +6,9 @@ from typing import Callable
 
 import pandas as pd
 from loguru import logger
-from lxml import cssselect, etree
 from tqdm import tqdm
+
+from lxml import cssselect, etree
 
 
 def cache(out_path_name: str, load_func):
@@ -72,5 +73,7 @@ if __name__ == "__main__":
     if '.' in args.out_name:
         raise ValueError(f'{args.out_name} should not include "." or suffixes.')
 
-    out_path = f'processed/{args.out_name}.pkl'
-    read_xml(args.xml_path, out_path)
+    out_path_str = f'processed/{args.out_name}.pkl'
+    out_path = Path(out_path_str)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    read_xml(args.xml_path, out_path_str)
