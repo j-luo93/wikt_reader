@@ -109,3 +109,5 @@ data/*
 .pytest_cache/*
 log/*
 *.xml
+processed/*
+.vscode
