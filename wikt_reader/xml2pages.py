@@ -37,7 +37,7 @@ def cache(out_path_name: str, load_func):
 
 
 @cache('out_path', pd.read_pickle)
-def read_xml(in_path: str, out_path: str) -> pd.DataFrame:
+def read_xml(in_path: str, out_path: str, namespaces=(0, 118)) -> pd.DataFrame:
     """Read xml file using `lxml.etree.parse`. Wiktionary dump contains special namespaces, so they are used to extract the pages. See https://stackoverflow.com/questions/6860013/xhtml-namespace-issues-with-cssselect-in-lxml."""
     logger.info(f'Loading xml from {in_path}.')
     xml_file = etree.parse(open(in_path, 'rb'))
@@ -63,11 +63,11 @@ def read_xml(in_path: str, out_path: str) -> pd.DataFrame:
     records = list()
     for page in tqdm(pages):
         ns = int(ns_selector(page)[0].text)
-        # Only normal pages and reconstruction pages are preserved, excluding special pages.
-        if ns in [0, 118]:
+        # By default, only normal pages and reconstruction pages are preserved, excluding special pages.
+        if ns in namespaces:
             title = title_selector(page)[0].text
             text = text_selector(page)[0].text
-            records.append({'title': title, 'reconstruction': ns == 118, 'text': text})
+            records.append({'title': title, 'namespace': ns, 'text': text})
     df = pd.DataFrame(records)
     logger.info(f'Extracted {len(df)} dictionary entries.')
     df = df.dropna()
@@ -128,7 +128,7 @@ def get_page_as_xml(text: str) -> str:
 def build_trees(raw_pages: Optional[pd.DataFrame], out_path: str) -> pd.DataFrame:
     logger.info(f'Building trees for the texts.')
     xmls = raw_pages['text'].progress_apply(get_page_as_xml)
-    page_xmls = pd.DataFrame({'title': raw_pages['title'], 'reconstruction': raw_pages['reconstruction'], 'text': xmls})
+    page_xmls = pd.DataFrame({'title': raw_pages['title'], 'namespace': raw_pages['namespace'], 'text': xmls})
     page_xmls.to_pickle(out_path)
     logger.info(f'Page trees saved to {out_path}.')
     return page_xmls
@@ -154,7 +154,7 @@ def extract_lang_sections(page_xmls: pd.DataFrame, out_path: str) -> pd.DataFram
     page_xmls = page_xmls.reset_index(drop=True)
     logger.info(f'Extracted {len(page_xmls)} language sections.')
 
-    lang_xmls = page_xmls[['title', 'reconstruction']]
+    lang_xmls = page_xmls[['title', 'namespace']]
     lang_xmls[['lang_section', 'lang']] = pd.DataFrame(page_xmls['extra'].tolist())
     lang_xmls.to_pickle(out_path)
     logger.info(f'Language sections saved to {out_path}.')
@@ -177,7 +177,7 @@ def extract_desc_sections(lang_xmls: pd.DataFrame, out_path: str) -> pd.DataFram
     lang_xmls['desc_section'] = desc_sections
 
     desc_xmls = lang_xmls.explode('desc_section').dropna(subset=['desc_section'])
-    desc_xmls = desc_xmls.reset_index(drop=True)[['title', 'reconstruction', 'lang', 'desc_section']]
+    desc_xmls = desc_xmls.reset_index(drop=True)[['title', 'namespace', 'lang', 'desc_section']]
     logger.info(f'Extracted {len(desc_xmls)} descendant sections in total.')
     desc_xmls.to_pickle(out_path)
     logger.info(f'Descendant sections saved to {out_path}.')
@@ -206,7 +206,7 @@ def extract_pairs(desc_xmls: pd.DataFrame, out_path: str) -> pd.DataFrame:
     pairs = pairs.dropna(subset=['extra'])
     pairs = pairs.reset_index(drop=True)
     pairs[['desc_lang', 'desc_token']] = pd.DataFrame(pairs['extra'].tolist())
-    pairs = pairs[['title', 'reconstruction', 'lang', 'desc_lang', 'desc_token']]
+    pairs = pairs[['title', 'namespace', 'lang', 'desc_lang', 'desc_token']]
     logger.info(f'Extracting {len(pairs)} pairs in total.')
     pairs.to_pickle(out_path)
     logger.info(f'Pairs saved to {out_path}.')
