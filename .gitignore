@@ -111,3 +111,4 @@ log/*
 *.xml
 processed/*
 .vscode
+lualib/*

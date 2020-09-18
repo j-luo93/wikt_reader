@@ -217,6 +217,7 @@ if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument('in_path', type=str, help='Path to the xml file.')
     parser.add_argument('out_name', type=str, help='Name for the output file without suffix.')
+    parser.add_argument('--namespaces', type=int, nargs='+', default=(0, 118), help='Namespaces to keep.')
     args = parser.parse_args()
     if '.' in args.out_name:
         raise ValueError(f'{args.out_name} should not include "." or suffixes.')
@@ -229,7 +230,7 @@ if __name__ == "__main__":
 
     # Get raw pages first.
     raw_path = f'{folder}/{args.out_name}.raw.pkl'
-    raw_pages = read_xml(args.in_path, raw_path)
+    raw_pages = read_xml(args.in_path, raw_path, namespaces=args.namespaces)
 
     # Build trees out of texts.
     xml_path = f'{folder}/{args.out_name}.xml.pkl'
@@ -246,4 +247,3 @@ if __name__ == "__main__":
     # Extract pairs of (desc_lang, desc_token).
     pair_path = f'{folder}/{args.out_name}.pair.pkl'
     pairs = extract_pairs(desc_xmls, pair_path)
-    breakpoint()  # BREAKPOINT(j_luo)
