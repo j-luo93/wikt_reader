@@ -1,3 +1,10 @@
+"""Prepare a dataframe that organizes all cognates into cognate sets.
+
+The dataframe contains three columns:
+    <ancestor_lang>, desc_lang, desc_form,
+where the column serves as the primary key.
+"""
+
 import re
 from argparse import ArgumentParser
 from dataclasses import dataclass, field
@@ -18,10 +25,19 @@ extract_token_pat = re.compile(r'^Reconstruction:.+?/\*?(.+)$')
 
 
 def extract_token(text: str) -> str:
+    """Extracts the token from the reconstruction title page."""
     return extract_token_pat.match(text).group(1)
 
 
-def remove_reconstruction(item: Tuple[str, str]):
+def remove_reconstruction(item: Tuple[str, str]) -> str:
+    """Extracts the token from title page, removing the prefix containing "Reconstruction:" if needed.
+
+    Args:
+        item (Tuple[str, str]): the (title, namespace) tuple
+
+    Returns:
+        str: the extracted token.
+    """
     title, ns = item
     # 118 indicates this page is for reconstructed tokens.
     if ns == 118:
@@ -31,13 +47,15 @@ def remove_reconstruction(item: Tuple[str, str]):
 
 @dataclass
 class Token:
+    """Represents a word in the graph."""
     lang: str
     form: str
-    title: str = field(init=False)
+    title: str = field(init=False)  # This is the actual title name used by Wiktionary.
 
     def __post_init__(self):
         if self.lang == 'prs':
             self.lang = 'fa'
+        # Need to compute the actual title (i.e., entry) name used by Wiktionary.
         try:
             self.title = make_entry_name(self.lang, self.form)
         except LuaError:
@@ -200,5 +218,5 @@ if __name__ == "__main__":
             records.append({args.common_ancestor: token.form, 'desc_lang': cog.lang, 'desc_form': cog.form})
     cog_set_df = pd.DataFrame(records)
     out_path = f'processed/{args.common_ancestor}.tsv'
-    cog_set_df.to_csv(out_path, index=None, sep='\t')
+    cog_set_df.to_csv(out_path, index=False, sep='\t')
     logger.info(f'Final output saved to {out_path}.')

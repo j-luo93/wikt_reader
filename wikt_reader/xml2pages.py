@@ -1,40 +1,67 @@
+"""This is the main script that converts an xml Wiktionary dump into several pickle files (of dataframes), including:
+    1. *.raw.pkl: all raw pages
+    2. *.xml.pkl: all pages with tree structures analyzed, stored in xml format
+    3. *.lang.pkl: all language sections
+    4. *.desc.pkl: all descendant sections
+    5. *.pair.pkl: all cognate pairs
+
+Note that you have to provide a list of namespaces to extract. By default, namespace 0 (normal pages) and
+118 (reconstruction pages) are extracted. See the <namespace> tag in the xml Wiktionary dump to find out
+what each namespace means.
+"""
+
 from __future__ import annotations
 
 import re
+import typing
 from argparse import ArgumentParser
 from dataclasses import dataclass, field
 from inspect import signature
 from pathlib import Path
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, Tuple
 
 import pandas as pd
 from loguru import logger
 from lxml import cssselect, etree
 from lxml.builder import E
+from numpy.lib.type_check import _is_type_dispatcher
 from tqdm import tqdm
 
-from .utils import cache
+from wikt_reader.utils import cache
 
 
 @cache('out_path', pd.read_pickle)
-def read_xml(in_path: str, out_path: str, namespaces=(0, 118)) -> pd.DataFrame:
-    """Read xml file using `lxml.etree.parse`. Wiktionary dump contains special namespaces, so they are used to extract the pages. See https://stackoverflow.com/questions/6860013/xhtml-namespace-issues-with-cssselect-in-lxml."""
-    logger.info(f'Loading xml from {in_path}.')
-    xml_file = etree.parse(open(in_path, 'rb'))
+def read_xml(xml_dump_path: str, out_path: str, namespaces: Tuple[int, ...] = (0, 118)) -> pd.DataFrame:
+    """Reads xml file using `lxml.etree.parse`.
+
+    Wiktionary dump contains special namespaces, so they are used to extract the pages. See https://stackoverflow.com/questions/6860013/xhtml-namespace-issues-with-cssselect-in-lxml.
+
+    Args:
+        xml_dump_path (str): path to the xml Wiktionary dump file.
+        out_path (str): path to save the output dataframe to.
+        namespaces (Tuple[int, ...], optional): namespaces to extract. See the documentation of this file for more details. Defaults to (0, 118).
+
+    Returns:
+        pd.DataFrame: a dataframe with all the contents of the xml dump.
+    """
+    logger.info(f'Loading xml from {xml_dump_path}.')
+    xml_file = etree.parse(open(xml_dump_path, 'rb'))  # type: ignore
     nsmap = xml_file.getroot().nsmap.copy()
 
-    # CSS selector cannot process no-prefix namspace.
+    # CSS selector cannot process no-prefix (`None`) namespace. It is converted to a "xhtml" namespace instead.
     nsmap['xhtml'] = nsmap[None]
     del nsmap[None]
 
     def get_selector(element: str):
         return cssselect.CSSSelector(f'xhtml|{element}', namespaces=nsmap)
 
+    # Extract all pages.
     logger.info('Extracting pages.')
     page_selector = get_selector('page')
     pages = page_selector(xml_file)
     logger.info(f'Extracted {len(pages)} in total.')
 
+    # Extract titles and texts with proper namespaces.
     title_selector = get_selector('title')
     text_selector = get_selector('text')
     ns_selector = get_selector('ns')
@@ -42,13 +69,14 @@ def read_xml(in_path: str, out_path: str, namespaces=(0, 118)) -> pd.DataFrame:
     logger.info('Extracting titles and texts from pages.')
     records = list()
     for page in tqdm(pages):
-        ns = int(ns_selector(page)[0].text)
-        # By default, only normal pages and reconstruction pages are preserved, excluding special pages.
+        ns = int(ns_selector(page)[0].text)  # This is the namespace.
         if ns in namespaces:
             title = title_selector(page)[0].text
             text = text_selector(page)[0].text
             records.append({'title': title, 'namespace': ns, 'text': text})
     df = pd.DataFrame(records)
+
+    # Clean up, save and return.
     logger.info(f'Extracted {len(df)} dictionary entries.')
     df = df.dropna()
     logger.info(f'Empty pages dropped, ending up with {len(df)} pages.')
@@ -61,21 +89,32 @@ header_pat = re.compile(r'^==+([^=]+?)==+$')
 
 
 @cache('out_path', pd.read_pickle)
-def build_trees(raw_pages: Optional[pd.DataFrame], out_path: str) -> pd.DataFrame:
+def build_trees(raw_pages: pd.DataFrame, out_path: str) -> pd.DataFrame:
+    """Builds tree structures for the raw pages (in Wikitext format) and converts them to xml.
+
+    Args:
+        raw_pages (pd.DataFrame): the input saved as a dataframe.
+        out_path (str): the path to save the output to
+
+    Returns:
+        pd.DataFrame: the dataframe with the new xml page (with tree structures in Wikitext).
+    """
 
     @dataclass
     class Node:
+        """Represents one node in the tree."""
         depth: int
         header: str
         text: str
         children: List[Node] = field(default_factory=list)
 
-        def to_element(self) -> etree.Element:
+        def to_element(self) -> etree.Element:  # type: ignore
             """Convert node to an element with proper sub-elements."""
             sub_elements = [child.to_element() for child in self.children]
             return E('section', self.text, *sub_elements, depth=str(self.depth), header=self.header)
 
     def get_page_as_xml(text: str) -> str:
+        """Convert the text from Wikitext format to xml format."""
         root = Node(0, 'ROOT', '')
         stack: List[Node] = [root]
         for line in text.split('\n'):
@@ -102,7 +141,7 @@ def build_trees(raw_pages: Optional[pd.DataFrame], out_path: str) -> pd.DataFram
                     parent_node.children.append(new_node)
                 else:
                     stack[-1].text += line + '\n'
-        xml = etree.tostring(root.to_element(), encoding=str)
+        xml = etree.tostring(root.to_element(), encoding=str)  # type: ignore
         return xml
 
     logger.info(f'Building trees for the texts.')
@@ -115,20 +154,29 @@ def build_trees(raw_pages: Optional[pd.DataFrame], out_path: str) -> pd.DataFram
 
 @cache('out_path', pd.read_pickle)
 def extract_lang_sections(page_xmls: pd.DataFrame, out_path: str) -> pd.DataFrame:
+    """Extract all the languages sections.
+
+    Args:
+        page_xmls (pd.DataFrame): the input dataframe with all pages stored in xml format (after building tree structures).
+        out_path (str): the path to save the output to.
+
+    Returns:
+        pd.DataFrame: the dataframe with all extracted language sections.
+    """
 
     lang_selector = cssselect.CSSSelector('section[depth="2"]')
 
     def extract(xml: str) -> str:
         """Extract sections with language headers."""
-        xml = etree.XML(xml)
+        xml = etree.XML(xml)  # type: ignore
         lang_sections = lang_selector(xml)
-        return [(etree.tostring(ls, encoding=str), ls.get('header')) for ls in lang_sections]
+        return [(etree.tostring(ls, encoding=str), ls.get('header')) for ls in lang_sections]  # type: ignore
 
     logger.info('Extracting language sections.')
     lang_tuples = page_xmls['text'].progress_apply(extract)
     page_xmls['extra'] = lang_tuples
 
-    page_xmls = page_xmls.explode('extra')
+    page_xmls = page_xmls.explode('extra')  # type: ignore
     page_xmls = page_xmls.dropna(subset=['extra'])
     page_xmls = page_xmls.reset_index(drop=True)
     logger.info(f'Extracted {len(page_xmls)} language sections.')
@@ -194,35 +242,39 @@ def extract_pairs(desc_xmls: pd.DataFrame, out_path: str) -> pd.DataFrame:
 
 if __name__ == "__main__":
     parser = ArgumentParser()
-    parser.add_argument('in_path', type=str, help='Path to the xml file.')
-    parser.add_argument('out_name', type=str, help='Name for the output file without suffix.')
-    parser.add_argument('--namespaces', type=int, nargs='+', default=(0, 118), help='Namespaces to keep.')
+    parser.add_argument('xml_dump_path', type=str, help='Path to the xml Wiktionary dump.')
+    parser.add_argument('out_prefix', type=str, help='Prefix for the output files.')
+    parser.add_argument('--namespaces', type=int, nargs='+', default=(0, 118),
+                        help='Namespaces to keep. The exact meanings of different namespaces are provided in the <namespaces> tag.')
     args = parser.parse_args()
-    if '.' in args.out_name:
-        raise ValueError(f'{args.out_name} should not include "." or suffixes.')
 
+    # Make sure `out_prefix` is properly formatted.
+    if '.' in args.out_prefix:
+        raise ValueError(f'{args.out_prefix} should not include "." or suffixes.')
+
+    # Track pandas progress.
     tqdm.pandas()
 
     # Create folder for caching/storing processed files.
-    folder = Path('./processed')
-    folder.mkdir(parents=True, exist_ok=True)
+    out_folder = Path('./processed')
+    out_folder.mkdir(parents=True, exist_ok=True)
 
     # Get raw pages first.
-    raw_path = f'{folder}/{args.out_name}.raw.pkl'
-    raw_pages = read_xml(args.in_path, raw_path, namespaces=args.namespaces)
+    raw_path = f'{out_folder}/{args.out_prefix}.raw.pkl'
+    raw_pages = read_xml(args.xml_dump_path, raw_path, namespaces=args.namespaces)
 
     # Build trees out of texts.
-    xml_path = f'{folder}/{args.out_name}.xml.pkl'
+    xml_path = f'{out_folder}/{args.out_prefix}.xml.pkl'
     page_xmls = build_trees(raw_pages, xml_path)
 
     # Extract language sections.
-    lang_path = f'{folder}/{args.out_name}.lang.pkl'
+    lang_path = f'{out_folder}/{args.out_prefix}.lang.pkl'
     lang_xmls = extract_lang_sections(page_xmls, lang_path)
 
     # Extract descendant sections.
-    desc_path = f'{folder}/{args.out_name}.desc.pkl'
+    desc_path = f'{out_folder}/{args.out_prefix}.desc.pkl'
     desc_xmls = extract_desc_sections(lang_xmls, desc_path)
 
     # Extract pairs of (desc_lang, desc_token).
-    pair_path = f'{folder}/{args.out_name}.pair.pkl'
+    pair_path = f'{out_folder}/{args.out_prefix}.pair.pkl'
     pairs = extract_pairs(desc_xmls, pair_path)
